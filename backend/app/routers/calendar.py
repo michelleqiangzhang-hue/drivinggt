@@ -6,24 +6,23 @@ placement, conflict handling, and pattern-aware warnings.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from app.ai import llm_json
-from app.ai.prompts import PLANNER_SYSTEM
 from app.auth import get_current_user
 from app.database import get_session
-from app.models import BlockStatus, CalendarBlock, User
+from app.models import CalendarBlock, User
 from app.schemas import BlockCreate, BlockRead, BlockUpdate, PlanRequest, PlanResponse
+from app.services.planning import plan_day
 
 router = APIRouter(prefix="/api/blocks", tags=["calendar"])
 
 
-def _day_bounds(day: datetime) -> tuple[datetime, datetime]:
-    start = datetime.combine(day.date(), time.min, tzinfo=timezone.utc)
-    return start, start + timedelta(days=1)
+def _naive(dt: datetime) -> datetime:
+    """Drop tzinfo so naive (SQLite-stored) and aware datetimes compare cleanly."""
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
 @router.get("", response_model=list[BlockRead])
@@ -47,6 +46,8 @@ def create_block(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> CalendarBlock:
+    if body.end <= body.start:
+        raise HTTPException(422, "Block end must be after start")
     block = CalendarBlock(user_id=user.id, **body.model_dump())
     session.add(block)
     session.commit()
@@ -76,7 +77,12 @@ def update_block(
     block = session.get(CalendarBlock, block_id)
     if block is None or block.user_id != user.id:
         raise HTTPException(404, "Block not found")
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    new_start = updates.get("start", block.start)
+    new_end = updates.get("end", block.end)
+    if _naive(new_end) <= _naive(new_start):
+        raise HTTPException(422, "Block end must be after start")
+    for field, value in updates.items():
         setattr(block, field, value)
     session.add(block)
     session.commit()
@@ -98,47 +104,15 @@ def delete_block(
 
 
 @router.post("/plan", response_model=PlanResponse)
-def plan_day(
+def plan(
     body: PlanRequest,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> PlanResponse:
-    """Turn natural-language intentions into concrete calendar blocks.
+    """Turn natural-language intentions into concrete, well-placed calendar blocks.
 
-    Baseline implementation places blocks sequentially starting at 09:00.
-    WORKSTREAM A: improve time placement, respect existing blocks, and add
-    pattern-aware warnings (e.g. "you usually don't finish 3h editing blocks").
+    Delegates planning (AI parsing, gap-aware time placement that avoids existing
+    blocks, concreteness nudges, and pattern-aware warnings) to
+    :func:`app.services.planning.plan_day`.
     """
-    day = body.date or datetime.now(timezone.utc)
-    cursor = datetime.combine(day.date(), time(9, 0), tzinfo=timezone.utc)
-
-    result = llm_json(
-        [
-            {"role": "system", "content": PLANNER_SYSTEM},
-            {"role": "user", "content": body.text},
-        ]
-    )
-
-    created: list[CalendarBlock] = []
-    for spec in result.get("blocks", []):
-        minutes = int(spec.get("minutes", 60))
-        block = CalendarBlock(
-            user_id=user.id,
-            title=spec.get("title", "Untitled block"),
-            category=spec.get("category", "Work"),
-            start=cursor,
-            end=cursor + timedelta(minutes=minutes),
-            status=BlockStatus.planned,
-        )
-        cursor = block.end
-        session.add(block)
-        created.append(block)
-    session.commit()
-    for b in created:
-        session.refresh(b)
-
-    return PlanResponse(
-        blocks=[BlockRead.model_validate(b) for b in created],
-        message=result.get("message", "Planned your day into concrete blocks."),
-        pattern_warnings=[],
-    )
+    return plan_day(session, user, body)
