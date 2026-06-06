@@ -2,86 +2,154 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api } from "@/api/client";
-import { categoryColor, fmtTime, minutesToLabel } from "@/lib/format";
+import type { BlockCreate, BlockRead, BlockUpdate } from "@/api/types";
 
-/**
- * WORKSTREAM D owns this page. Foundation ships a working natural-language planner
- * and block list. D should build the rich day/hourly timeline view, drag-to-create,
- * inline editing, and the plan-vs-reality overlay.
- */
+import BlockModal from "./BlockModal";
+import DateSwitcher from "./DateSwitcher";
+import TimelineView from "./TimelineView";
+import { useCalendarDay } from "./useCalendarDay";
+
 export default function CalendarPage() {
   const qc = useQueryClient();
-  const [text, setText] = useState("");
+  const { date, dayStart, dayEnd, prev, next, today, isToday } = useCalendarDay();
 
-  const blocks = useQuery({ queryKey: ["blocks", "all"], queryFn: () => api.listBlocks() });
+  // NL planner state
+  const [planText, setPlanText] = useState("");
+  const [showPlanner, setShowPlanner] = useState(false);
+
+  // Modal state
+  const [modalBlock, setModalBlock] = useState<BlockRead | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [slotStart, setSlotStart] = useState<string | undefined>();
+  const [slotEnd, setSlotEnd] = useState<string | undefined>();
+
+  const blocks = useQuery({
+    queryKey: ["blocks", date],
+    queryFn: () => api.listBlocks(dayStart, dayEnd),
+  });
 
   const plan = useMutation({
-    mutationFn: (t: string) => api.planDay({ text: t }),
+    mutationFn: (t: string) => api.planDay({ text: t, date }),
     onSuccess: () => {
-      setText("");
+      setPlanText("");
       qc.invalidateQueries({ queryKey: ["blocks"] });
       qc.invalidateQueries({ queryKey: ["summary"] });
     },
   });
 
+  const createBlock = useMutation({
+    mutationFn: (body: BlockCreate) => api.createBlock(body),
+    onSuccess: () => {
+      setModalOpen(false);
+      qc.invalidateQueries({ queryKey: ["blocks"] });
+    },
+  });
+
+  const updateBlock = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: BlockUpdate }) => api.updateBlock(id, body),
+    onSuccess: () => {
+      setModalOpen(false);
+      qc.invalidateQueries({ queryKey: ["blocks"] });
+    },
+  });
+
+  const deleteBlock = useMutation({
+    mutationFn: (id: number) => api.deleteBlock(id),
+    onSuccess: () => {
+      setModalOpen(false);
+      qc.invalidateQueries({ queryKey: ["blocks"] });
+    },
+  });
+
+  const handleBlockClick = (block: BlockRead) => {
+    setModalBlock(block);
+    setSlotStart(undefined);
+    setSlotEnd(undefined);
+    setModalOpen(true);
+  };
+
+  const handleSlotClick = (startTime: string, endTime: string) => {
+    setModalBlock(null);
+    setSlotStart(startTime);
+    setSlotEnd(endTime);
+    setModalOpen(true);
+  };
+
+  const handleSave = (data: BlockCreate | BlockUpdate) => {
+    if (modalBlock) {
+      updateBlock.mutate({ id: modalBlock.id, body: data as BlockUpdate });
+    } else {
+      createBlock.mutate(data as BlockCreate);
+    }
+  };
+
   return (
-    <div className="space-y-4">
-      <section className="card p-4">
-        <h2 className="mb-1 text-lg font-bold">Plan your day</h2>
-        <p className="mb-3 text-sm text-muted">
-          Tell Bogi in plain words. Be concrete: “edit videos for 2 hours, email
-          manufacturers for 45 min.”
-        </p>
-        <textarea
-          className="input min-h-[90px] resize-none"
-          placeholder="e.g. record podcast for 1 hour, edit videos for 2 hours…"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button
-          className="btn-brand mt-3 w-full"
-          disabled={!text.trim() || plan.isPending}
-          onClick={() => plan.mutate(text)}
-        >
-          {plan.isPending ? "Planning…" : "Turn into blocks"}
-        </button>
-        {plan.data && (
-          <div className="mt-3 rounded-xl bg-brand/10 p-3 text-sm text-brand">
-            {plan.data.message}
-          </div>
-        )}
+    <div className="space-y-3">
+      {/* Date navigation */}
+      <DateSwitcher date={date} isToday={isToday} onPrev={prev} onNext={next} onToday={today} />
+
+      {/* Plan with Bogi toggle */}
+      <button
+        className={`w-full text-left ${showPlanner ? "btn-brand" : "btn-ghost"} text-sm`}
+        onClick={() => setShowPlanner(!showPlanner)}
+      >
+        ✎ Plan with Bogi
+      </button>
+
+      {/* NL Planner panel */}
+      {showPlanner && (
+        <section className="card p-4">
+          <p className="mb-2 text-xs text-muted">
+            Describe your day naturally — Bogi turns it into time blocks.
+          </p>
+          <textarea
+            className="input min-h-[72px] resize-none text-sm"
+            placeholder="e.g. record podcast 1hr, edit videos 2hrs, gym 45min…"
+            value={planText}
+            onChange={(e) => setPlanText(e.target.value)}
+          />
+          <button
+            className="btn-brand mt-2 w-full text-sm"
+            disabled={!planText.trim() || plan.isPending}
+            onClick={() => plan.mutate(planText)}
+          >
+            {plan.isPending ? "Planning…" : "Turn into blocks"}
+          </button>
+          {plan.data && (
+            <div className="mt-2 rounded-xl bg-brand/10 p-2.5 text-xs text-brand">
+              {plan.data.message}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Timeline */}
+      <section className="card overflow-hidden p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-muted">Timeline</h3>
+          <span className="text-[10px] text-muted">Tap slot to add</span>
+        </div>
+        <div className="overflow-y-auto" style={{ maxHeight: "520px" }}>
+          <TimelineView
+            blocks={blocks.data ?? []}
+            date={date}
+            onBlockClick={handleBlockClick}
+            onSlotClick={handleSlotClick}
+          />
+        </div>
       </section>
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-bold uppercase tracking-wide text-muted">
-          Your blocks
-        </h3>
-        {blocks.data?.map((b) => (
-          <div key={b.id} className="card flex items-center gap-3 p-3">
-            <div
-              className="h-9 w-1.5 rounded-full"
-              style={{ background: categoryColor(b.category) }}
-            />
-            <div className="flex-1">
-              <div className="font-semibold">{b.title}</div>
-              <div className="text-xs text-muted">
-                {fmtTime(b.start)}–{fmtTime(b.end)} · {minutesToLabel(b.planned_minutes)}
-              </div>
-            </div>
-            <button
-              className="text-xs text-muted hover:text-bad"
-              onClick={() =>
-                api.deleteBlock(b.id).then(() => qc.invalidateQueries({ queryKey: ["blocks"] }))
-              }
-            >
-              Delete
-            </button>
-          </div>
-        ))}
-        {blocks.data?.length === 0 && (
-          <div className="card p-5 text-center text-sm text-muted">No blocks yet.</div>
-        )}
-      </section>
+      {/* Modal */}
+      {modalOpen && (
+        <BlockModal
+          block={modalBlock}
+          defaultStart={slotStart}
+          defaultEnd={slotEnd}
+          onSave={handleSave}
+          onDelete={modalBlock ? () => deleteBlock.mutate(modalBlock.id) : undefined}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </div>
   );
 }
