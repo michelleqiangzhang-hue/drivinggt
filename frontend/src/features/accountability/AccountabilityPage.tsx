@@ -27,17 +27,18 @@ export default function AccountabilityPage() {
     queryFn: () => api.unaccountedBlocks(),
   });
 
-  const [currentIdx, setCurrentIdx] = useState(0);
+  const [logged, setLogged] = useState(0);
   const [showBlankTime, setShowBlankTime] = useState(false);
 
   const blocks = unaccounted.data ?? [];
-  const activeBlock = blocks[currentIdx] ?? null;
+  const activeBlock = blocks[0] ?? null;
+  const total = logged + blocks.length;
 
   const advance = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["unaccounted"] });
     qc.invalidateQueries({ queryKey: ["blocks"] });
     qc.invalidateQueries({ queryKey: ["summary"] });
-    setCurrentIdx((i) => i + 1);
+    setLogged((n) => n + 1);
   }, [qc]);
 
   if (unaccounted.isLoading) {
@@ -49,7 +50,7 @@ export default function AccountabilityPage() {
   }
 
   // Completion state
-  if (blocks.length === 0 || currentIdx >= blocks.length) {
+  if (blocks.length === 0) {
     return (
       <div className="space-y-4">
         <CompletionState />
@@ -83,11 +84,11 @@ export default function AccountabilityPage() {
           <div className="h-1.5 flex-1 rounded-full bg-white/10">
             <div
               className="h-full rounded-full bg-brand transition-all"
-              style={{ width: `${((currentIdx) / blocks.length) * 100}%` }}
+              style={{ width: `${total > 0 ? (logged / total) * 100 : 0}%` }}
             />
           </div>
           <span className="text-xs text-muted">
-            {currentIdx}/{blocks.length}
+            {logged}/{total}
           </span>
         </div>
       </section>
