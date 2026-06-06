@@ -15,7 +15,10 @@ export default function BlockCard({ block, top, height, onClick }: Props) {
 
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
       className="absolute left-12 right-2 overflow-hidden rounded-xl border border-white/5 px-3 py-1.5 text-left transition hover:brightness-110"
       style={{
         top: `${top}px`,

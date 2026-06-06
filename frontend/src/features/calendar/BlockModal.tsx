@@ -19,8 +19,8 @@ export default function BlockModal({ block, defaultStart, defaultEnd, onSave, on
 
   const [title, setTitle] = useState(block?.title ?? "");
   const [category, setCategory] = useState(block?.category ?? "Work");
-  const [start, setStart] = useState(block?.start?.slice(11, 16) ?? defaultStart ?? "09:00");
-  const [end, setEnd] = useState(block?.end?.slice(11, 16) ?? defaultEnd ?? "10:00");
+  const [start, setStart] = useState(block?.start?.slice(11, 16) ?? defaultStart?.slice(11, 16) ?? "09:00");
+  const [end, setEnd] = useState(block?.end?.slice(11, 16) ?? defaultEnd?.slice(11, 16) ?? "10:00");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -44,7 +44,7 @@ export default function BlockModal({ block, defaultStart, defaultEnd, onSave, on
   };
 
   const toISO = (time: string) => {
-    const datePrefix = block?.start?.slice(0, 10) ?? defaultStart?.slice(0, 10) ?? new Date().toISOString().slice(0, 10);
+    const datePrefix = block?.start?.slice(0, 10) ?? (defaultStart && defaultStart.length >= 10 ? defaultStart.slice(0, 10) : new Date().toISOString().slice(0, 10));
     return `${datePrefix}T${time}:00`;
   };
 
