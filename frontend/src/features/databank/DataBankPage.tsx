@@ -229,7 +229,7 @@ export default function DataBankPage() {
                     <Tooltip
                       formatter={(v: number, n: string) => [
                         minutesToLabel(v),
-                        n === "planned" ? "Planned" : "Actual",
+                        n,
                       ]}
                       contentStyle={{
                         background: "#1f232c",
