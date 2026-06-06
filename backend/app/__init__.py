@@ -1,0 +1,1 @@
+"""Bogi backend application package."""
