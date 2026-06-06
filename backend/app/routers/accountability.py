@@ -16,22 +16,9 @@ from app.auth import get_current_user
 from app.database import get_session
 from app.models import AccountabilityLog, BlockStatus, CalendarBlock, User
 from app.schemas import BlockRead, LogCreate, LogRead
+from app.services.analytics import derive_actual_minutes, infer_status
 
 router = APIRouter(prefix="/api/logs", tags=["accountability"])
-
-
-def _infer_status(block: CalendarBlock, log: AccountabilityLog) -> BlockStatus:
-    """Did reality match intention?"""
-    same_category = (log.category or "").lower() == (block.category or "").lower()
-    if not log.productive and not same_category:
-        return BlockStatus.missed
-    planned = block.planned_minutes
-    actual = log.actual_minutes if log.actual_minutes is not None else planned
-    if same_category and actual >= 0.8 * planned:
-        return BlockStatus.completed
-    if actual <= 0.2 * planned or not same_category:
-        return BlockStatus.missed
-    return BlockStatus.partial
 
 
 @router.get("", response_model=list[LogRead])
@@ -56,7 +43,12 @@ def create_log(
     user: User = Depends(get_current_user),
 ) -> AccountabilityLog:
     log = AccountabilityLog(user_id=user.id, **body.model_dump())
-    session.add(log)
+
+    # Derive actual_minutes from start/end for blank-time logs (no block).
+    if log.actual_minutes is None and log.block_id is None:
+        derived = derive_actual_minutes(log.start, log.end)
+        if derived is not None:
+            log.actual_minutes = derived
 
     # If this log accounts for a planned block, update that block's status.
     if log.block_id is not None:
@@ -65,9 +57,10 @@ def create_log(
             raise HTTPException(404, "Block not found")
         if log.actual_minutes is None:
             log.actual_minutes = block.planned_minutes
-        block.status = _infer_status(block, log)
+        block.status = infer_status(block, log)
         session.add(block)
 
+    session.add(log)
     session.commit()
     session.refresh(log)
     return log
