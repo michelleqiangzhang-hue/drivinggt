@@ -92,7 +92,7 @@ export default function AccountabilityPage() {
         </div>
       </section>
 
-      <CheckInFlow block={activeBlock!} onDone={advance} />
+      <CheckInFlow key={activeBlock!.id} block={activeBlock!} onDone={advance} />
 
       <button
         className="btn-ghost w-full text-sm"
